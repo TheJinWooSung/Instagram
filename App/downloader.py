@@ -1,18 +1,22 @@
 import os
 import re
+import html
 import requests
-from app.utils import random_filename
+from datetime import datetime
+import uuid
 
-def download_reel(insta_url: str) -> str:
+def random_filename(ext=".mp4"):
+    return f"reel_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}{ext}"
+
+def download_reel(insta_url: str) -> dict:
     """
-    Downloads Instagram Reels video using public endpoints.
+    Downloads an Instagram Reel video using public endpoints and saves locally.
+    Returns metadata including local file path.
     """
 
-    # Ensure URL is valid
     if "instagram.com/reel/" not in insta_url:
         raise ValueError("Invalid Instagram reel URL")
 
-    # Simulate a real browser request (to bypass basic filters)
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -21,28 +25,32 @@ def download_reel(insta_url: str) -> str:
         )
     }
 
-    # Get HTML page
-    response = requests.get(insta_url, headers=headers)
-    if response.status_code != 200:
-        raise RuntimeError("Failed to fetch reel page")
+    response = requests.get(insta_url, headers=headers, timeout=10, allow_redirects=True)
+    response.raise_for_status()
 
-    # Extract video URL from HTML (simplified JSON pattern)
+    # Try multiple extraction methods
     match = re.search(r'"video_url":"(https:[^"]+)"', response.text)
-    if not match:
-        raise RuntimeError("Couldn't find video URL (Reel might be private)")
+    if match:
+        video_url = html.unescape(match.group(1))
+    else:
+        meta_match = re.search(r'<meta property="og:video" content="([^"]+)"', response.text)
+        if meta_match:
+            video_url = meta_match.group(1)
+        else:
+            raise RuntimeError("Couldn't find video URL (Reel may be private or structure changed)")
 
-    video_url = match.group(1).replace("\\u0026", "&")
+    video_response = requests.get(video_url, headers=headers, timeout=10)
+    video_response.raise_for_status()
 
-    # Download video binary
-    video_data = requests.get(video_url, headers=headers).content
-
-    # Save file
-    filename = random_filename(".mp4")
     output_dir = "downloads"
     os.makedirs(output_dir, exist_ok=True)
-    file_path = os.path.join(output_dir, filename)
+    file_path = os.path.join(output_dir, random_filename(".mp4"))
 
     with open(file_path, "wb") as f:
-        f.write(video_data)
+        f.write(video_response.content)
 
-    return file_path
+    return {
+        "status": "ok",
+        "file_path": file_path,
+        "video_url": video_url
+    }
